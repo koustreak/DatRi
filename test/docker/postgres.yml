@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: datri_postgres
+    environment:
+      POSTGRES_USER: datri
+      POSTGRES_PASSWORD: datri_secret
+      POSTGRES_DB: datri_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - datri_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datri -d datri_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  datri_pg_data:

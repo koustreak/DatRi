@@ -1,0 +1,31 @@
+services:
+  mysql:
+    image: mysql:8-debian
+    container_name: datri_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root_secret
+      MYSQL_USER: datri
+      MYSQL_PASSWORD: datri_secret
+      MYSQL_DATABASE: datri_test
+    ports:
+      - "3306:3306"
+    volumes:
+      - datri_mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "datri",
+          "--password=datri_secret",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  datri_mysql_data:

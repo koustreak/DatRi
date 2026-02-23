@@ -1,0 +1,12 @@
+services:
+  sqlite:
+    image: nouchka/sqlite3:latest
+    container_name: datri_sqlite
+    volumes:
+      - datri_sqlite_data:/data
+    # SQLite has no server — this container just keeps the file alive
+    # Tests connect directly to the mounted file path: /data/datri_test.db
+    command: ["tail", "-f", "/dev/null"]
+
+volumes:
+  datri_sqlite_data:
