@@ -8,7 +8,7 @@ import (
 	"github.com/koustreak/DatRi/internal/database"
 )
 
-// DB implements database.DB for PostgreSQL using pgxpool
+// DB implements database.Reader for PostgreSQL using pgxpool
 type DB struct {
 	pool *pgxpool.Pool
 	cfg  *database.Config
@@ -39,10 +39,13 @@ func (db *DB) Close(_ context.Context) error {
 
 // Ping verifies the connection is alive
 func (db *DB) Ping(ctx context.Context) error {
+	if db.pool == nil {
+		return &database.DBError{Kind: database.ErrKindConnection, Message: "not connected"}
+	}
 	return mapError(db.pool.Ping(ctx))
 }
 
-// Query executes a query returning multiple rows
+// Query executes a SELECT query returning multiple rows
 func (db *DB) Query(ctx context.Context, sql string, args ...any) (database.Rows, error) {
 	rows, err := db.pool.Query(ctx, sql, args...)
 	if err != nil {
@@ -51,27 +54,9 @@ func (db *DB) Query(ctx context.Context, sql string, args ...any) (database.Rows
 	return &pgRows{rows: rows}, nil
 }
 
-// QueryRow executes a query returning a single row
+// QueryRow executes a SELECT query returning a single row
 func (db *DB) QueryRow(ctx context.Context, sql string, args ...any) database.Row {
 	return &pgRow{row: db.pool.QueryRow(ctx, sql, args...)}
-}
-
-// Exec executes a statement returning the number of rows affected
-func (db *DB) Exec(ctx context.Context, sql string, args ...any) (int64, error) {
-	tag, err := db.pool.Exec(ctx, sql, args...)
-	if err != nil {
-		return 0, mapError(err)
-	}
-	return tag.RowsAffected(), nil
-}
-
-// Begin starts a transaction
-func (db *DB) Begin(ctx context.Context) (database.Tx, error) {
-	tx, err := db.pool.Begin(ctx)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	return &pgTx{tx: tx}, nil
 }
 
 // Pool returns the underlying pgxpool (for advanced use)
@@ -93,35 +78,3 @@ func (r *pgRows) Err() error             { return mapError(r.rows.Err()) }
 type pgRow struct{ row pgx.Row }
 
 func (r *pgRow) Scan(dest ...any) error { return mapError(r.row.Scan(dest...)) }
-
-// --- pgTx wraps pgx.Tx ---
-
-type pgTx struct{ tx pgx.Tx }
-
-func (t *pgTx) Query(ctx context.Context, sql string, args ...any) (database.Rows, error) {
-	rows, err := t.tx.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	return &pgRows{rows: rows}, nil
-}
-
-func (t *pgTx) QueryRow(ctx context.Context, sql string, args ...any) database.Row {
-	return &pgRow{row: t.tx.QueryRow(ctx, sql, args...)}
-}
-
-func (t *pgTx) Exec(ctx context.Context, sql string, args ...any) (int64, error) {
-	tag, err := t.tx.Exec(ctx, sql, args...)
-	if err != nil {
-		return 0, mapError(err)
-	}
-	return tag.RowsAffected(), nil
-}
-
-func (t *pgTx) Commit(ctx context.Context) error {
-	return mapError(t.tx.Commit(ctx))
-}
-
-func (t *pgTx) Rollback(ctx context.Context) error {
-	return mapError(t.tx.Rollback(ctx))
-}

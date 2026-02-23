@@ -10,10 +10,9 @@ import (
 )
 
 const (
-	defaultMaxConns     = 10
-	defaultMinConns     = 2
-	defaultMaxIdleConns = 5
-	defaultConnTimeout  = 5 * time.Second
+	defaultMaxConns    = 10
+	defaultMinConns    = 2
+	defaultConnTimeout = 5 * time.Second
 )
 
 // buildPool creates a pgxpool from the given config

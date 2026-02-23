@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/koustreak/DatRi/internal/database"
@@ -13,16 +14,15 @@ import (
 
 func main() {
 	ctx := context.Background()
+	dbName := getEnv("MYSQL_DB", "datri_test")
 
-	// --- 1. Connect ---
+	// --- Connect ---
 	db := mysql.New(&database.Config{
 		Host:     getEnv("MYSQL_HOST", "localhost"),
 		Port:     3306,
 		User:     getEnv("MYSQL_USER", "datri"),
 		Password: getEnv("MYSQL_PASSWORD", "datri_secret"),
-		Database: getEnv("MYSQL_DB", "datri_test"),
-		MaxConns: 10,
-		MinConns: 2,
+		Database: dbName,
 	})
 
 	fmt.Println("Connecting to MySQL...")
@@ -32,122 +32,93 @@ func main() {
 	defer db.Close(ctx)
 	fmt.Println("✅ Connected")
 
-	// --- 2. Ping ---
+	// --- Ping ---
 	if err := db.Ping(ctx); err != nil {
 		log.Fatalf("ping: %v", err)
 	}
 	fmt.Println("✅ Ping OK")
 
-	// --- 3. Create table ---
-	_, err := db.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS users (
-			id         INT AUTO_INCREMENT PRIMARY KEY,
-			name       VARCHAR(100) NOT NULL,
-			email      VARCHAR(100) NOT NULL UNIQUE,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
+	// --- MySQL version ---
+	var version string
+	if err := db.QueryRow(ctx, "SELECT VERSION()").Scan(&version); err != nil {
+		log.Fatalf("version: %v", err)
+	}
+	fmt.Printf("✅ MySQL version: %s\n", version)
+
+	// --- Introspect schema ---
+	fmt.Printf("\n📦 Introspecting database: %s\n", dbName)
+	introspector := mysql.NewIntrospector(db)
+
+	tables, err := introspector.ListTables(ctx, dbName)
 	if err != nil {
-		log.Fatalf("create table: %v", err)
-	}
-	fmt.Println("✅ Table ready")
-
-	// --- 4. Insert rows ---
-	seeds := []struct{ name, email string }{
-		{"Alice", "alice@example.com"},
-		{"Bob", "bob@example.com"},
-		{"Charlie", "charlie@example.com"},
+		log.Fatalf("list tables: %v", err)
 	}
 
-	for _, s := range seeds {
-		_, err := db.Exec(ctx,
-			"INSERT IGNORE INTO users (name, email) VALUES (?, ?)",
-			s.name, s.email,
-		)
+	fmt.Printf("📋 Tables found: %d\n", len(tables))
+	if len(tables) == 0 {
+		fmt.Println("  (no tables — create some in your DB first)")
+		fmt.Println("\n💡 Example:")
+		fmt.Println("  CREATE TABLE users (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100), email VARCHAR(100) UNIQUE);")
+		fmt.Println("  CREATE TABLE posts (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, title VARCHAR(255), FOREIGN KEY (user_id) REFERENCES users(id));")
+		return
+	}
+
+	// --- Inspect each table ---
+	fmt.Println("\n🔍 Table Details:")
+	for _, t := range tables {
+		info, err := introspector.InspectTable(ctx, dbName, t)
 		if err != nil {
-			log.Fatalf("insert %s: %v", s.name, err)
+			log.Printf("  inspect %s: %v", t, err)
+			continue
 		}
-	}
-	fmt.Println("✅ Rows seeded")
 
-	// --- 5. Query all rows ---
-	fmt.Println("\n📋 Users:")
-	rows, err := db.Query(ctx, "SELECT id, name, email, created_at FROM users ORDER BY id")
-	if err != nil {
-		log.Fatalf("query: %v", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var id int
-		var name, email string
-		var createdAt time.Time
-
-		if err := rows.Scan(&id, &name, &email, &createdAt); err != nil {
-			log.Fatalf("scan: %v", err)
+		fmt.Printf("\n  ┌─ %s\n", info.Name)
+		for _, col := range info.Columns {
+			fmt.Printf("  │  %-20s %-15s %s\n", col.Name, col.DataType, buildFlags(col))
 		}
-		fmt.Printf("  [%d] %-10s %-25s %s\n", id, name, email, createdAt.Format(time.RFC3339))
-	}
-	if err := rows.Err(); err != nil {
-		log.Fatalf("rows err: %v", err)
+		fmt.Printf("  └─ (%d columns)\n", len(info.Columns))
 	}
 
-	// --- 6. Query single row ---
-	fmt.Println("\n🔍 Lookup by email:")
-	var id int
-	var name string
-	err = db.QueryRow(ctx,
-		"SELECT id, name FROM users WHERE email = ?",
-		"alice@example.com",
-	).Scan(&id, &name)
+	// --- Foreign keys ---
+	fmt.Println("\n🔗 Foreign Keys:")
+	schema, err := database.InspectSchema(ctx, introspector, dbName)
 	if err != nil {
-		log.Fatalf("query row: %v", err)
+		log.Fatalf("inspect schema: %v", err)
 	}
-	fmt.Printf("  Found: id=%d name=%s\n", id, name)
+	if len(schema.ForeignKeys) == 0 {
+		fmt.Println("  (none)")
+	}
+	for _, fk := range schema.ForeignKeys {
+		fmt.Printf("  %s.%s → %s.%s\n", fk.FromTable, fk.FromColumn, fk.ToTable, fk.ToColumn)
+	}
 
-	// --- 7. Transaction ---
-	fmt.Println("\n🔄 Transaction:")
-	tx, err := db.Begin(ctx)
+	// --- Error handling demo ---
+	fmt.Println("\n⚠️  Error handling (bad table):")
+	_, err = db.Query(ctx, "SELECT * FROM non_existent_table_xyz")
 	if err != nil {
-		log.Fatalf("begin tx: %v", err)
-	}
-
-	_, err = tx.Exec(ctx,
-		"INSERT IGNORE INTO users (name, email) VALUES (?, ?)",
-		"Dave", "dave@example.com",
-	)
-	if err != nil {
-		tx.Rollback(ctx)
-		log.Fatalf("tx insert: %v", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		log.Fatalf("commit: %v", err)
-	}
-	fmt.Println("  ✅ Transaction committed")
-
-	// --- 8. Error handling demo ---
-	fmt.Println("\n⚠️  Error handling (duplicate email):")
-	_, err = db.Exec(ctx,
-		"INSERT INTO users (name, email) VALUES (?, ?)",
-		"Duplicate", "alice@example.com", // already exists
-	)
-	if err != nil {
-		var dbErr *database.DBError
-		if isDBError(err, &dbErr) {
-			fmt.Printf("  Kind=%v Message=%s\n", dbErr.Kind, dbErr.Message)
+		if e, ok := err.(*database.DBError); ok {
+			fmt.Printf("  Kind=%v Message=%s\n", e.Kind, e.Message)
 		}
 	}
 
-	fmt.Println("\n✅ MySQL demo complete")
+	fmt.Printf("\n✅ Done at %s\n", time.Now().Format(time.RFC3339))
 }
 
-func isDBError(err error, target **database.DBError) bool {
-	if e, ok := err.(*database.DBError); ok {
-		*target = e
-		return true
+func buildFlags(col database.ColumnInfo) string {
+	var flags []string
+	if col.IsPrimaryKey {
+		flags = append(flags, "PK")
 	}
-	return false
+	if col.IsUnique {
+		flags = append(flags, "UNIQUE")
+	}
+	if !col.IsNullable {
+		flags = append(flags, "NOT NULL")
+	}
+	if col.DefaultValue != nil {
+		flags = append(flags, fmt.Sprintf("DEFAULT=%s", *col.DefaultValue))
+	}
+	return strings.Join(flags, " ")
 }
 
 func getEnv(key, fallback string) string {

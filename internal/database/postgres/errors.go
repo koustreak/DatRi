@@ -9,14 +9,13 @@ import (
 	"github.com/koustreak/DatRi/internal/database"
 )
 
-// pgErrCode maps PostgreSQL error codes to DatRi error kinds
+// PostgreSQL SQLSTATE error codes (read-relevant only)
 // Full list: https://www.postgresql.org/docs/current/errcodes-appendix.html
 const (
-	pgErrUniqueViolation     = "23505"
-	pgErrForeignKeyViolation = "23503"
-	pgErrNotNullViolation    = "23502"
-	pgErrConnectionFailure   = "08006"
-	pgErrSyntaxError         = "42601"
+	pgErrConnectionFailure = "08006"
+	pgErrSyntaxError       = "42601"
+	pgErrUndefinedTable    = "42P01"
+	pgErrUndefinedColumn   = "42703"
 )
 
 // mapError converts a pgx error into a DatRi DBError
@@ -25,7 +24,6 @@ func mapError(err error) error {
 		return nil
 	}
 
-	// No rows
 	if errors.Is(err, pgx.ErrNoRows) {
 		return &database.DBError{
 			Kind:    database.ErrKindNotFound,
@@ -34,38 +32,19 @@ func mapError(err error) error {
 		}
 	}
 
-	// Postgres-specific errors
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
-		case pgErrUniqueViolation:
-			return &database.DBError{
-				Kind:    database.ErrKindConflict,
-				Message: fmt.Sprintf("conflict: %s", pgErr.Detail),
-				Cause:   err,
-			}
-		case pgErrForeignKeyViolation:
-			return &database.DBError{
-				Kind:    database.ErrKindConflict,
-				Message: fmt.Sprintf("foreign key violation: %s", pgErr.Detail),
-				Cause:   err,
-			}
-		case pgErrNotNullViolation:
-			return &database.DBError{
-				Kind:    database.ErrKindInvalid,
-				Message: fmt.Sprintf("not null violation: %s", pgErr.Detail),
-				Cause:   err,
-			}
 		case pgErrConnectionFailure:
 			return &database.DBError{
 				Kind:    database.ErrKindConnection,
 				Message: "database connection failed",
 				Cause:   err,
 			}
-		case pgErrSyntaxError:
+		case pgErrSyntaxError, pgErrUndefinedTable, pgErrUndefinedColumn:
 			return &database.DBError{
 				Kind:    database.ErrKindQuery,
-				Message: fmt.Sprintf("invalid query: %s", pgErr.Message),
+				Message: fmt.Sprintf("query error: %s", pgErr.Message),
 				Cause:   err,
 			}
 		}
