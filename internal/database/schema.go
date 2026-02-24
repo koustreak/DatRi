@@ -1,37 +1,57 @@
 package database
 
-import "context"
-
-// Introspector reads the structure of a database (tables, columns, foreign keys).
-// Each driver implements the DB-specific queries; InspectSchema is shared.
-type Introspector interface {
-	ListTables(ctx context.Context, schema string) ([]string, error)
-	TableExists(ctx context.Context, schema, table string) (bool, error)
-	InspectTable(ctx context.Context, schema, table string) (*TableInfo, error)
-	ListForeignKeys(ctx context.Context, schema string) ([]ForeignKey, error)
+// Schema represents the entire introspected database schema.
+// It is built once at startup and cached — never fetched per-request.
+type Schema struct {
+	// Tables maps table name to its metadata.
+	Tables map[string]*TableInfo
 }
 
-// InspectSchema builds the full SchemaInfo by orchestrating the Introspector.
-// Shared across all DB drivers — no duplication in drivers.
-func InspectSchema(ctx context.Context, i Introspector, schema string) (*SchemaInfo, error) {
-	tables, err := i.ListTables(ctx, schema)
-	if err != nil {
-		return nil, err
-	}
+// TableInfo describes a single table.
+type TableInfo struct {
+	// Name is the table name as it appears in the database.
+	Name string
 
-	info := &SchemaInfo{}
-	for _, table := range tables {
-		ti, err := i.InspectTable(ctx, schema, table)
-		if err != nil {
-			return nil, err
-		}
-		info.Tables = append(info.Tables, *ti)
-	}
+	// Columns is the ordered list of columns (by ordinal position).
+	Columns []*ColumnInfo
 
-	fks, err := i.ListForeignKeys(ctx, schema)
-	if err != nil {
-		return nil, err
-	}
-	info.ForeignKeys = fks
-	return info, nil
+	// PrimaryKey holds the column names that form the primary key.
+	// Composite PKs are fully supported.
+	PrimaryKey []string
+
+	// ForeignKeys lists all outbound foreign key relationships.
+	ForeignKeys []*ForeignKey
+}
+
+// ColumnInfo describes a single column within a table.
+type ColumnInfo struct {
+	// Name is the column name.
+	Name string
+
+	// DataType is the database-level type (e.g. "integer", "text", "timestamp").
+	DataType string
+
+	// Nullable reports whether the column accepts NULL values.
+	Nullable bool
+
+	// IsPrimary reports whether this column is part of the primary key.
+	IsPrimary bool
+
+	// IsUnique reports whether this column has a UNIQUE constraint.
+	IsUnique bool
+
+	// Default is the column's default expression, if any (e.g. "now()", "0").
+	Default *string
+}
+
+// ForeignKey describes a single foreign key relationship on a column.
+type ForeignKey struct {
+	// Column is the local column that holds the foreign key.
+	Column string
+
+	// RefTable is the referenced table.
+	RefTable string
+
+	// RefColumn is the referenced column in the RefTable.
+	RefColumn string
 }
