@@ -30,61 +30,47 @@ func main() {
 		log.Fatalf("connect: %v", err)
 	}
 	defer db.Close(ctx)
-	fmt.Println("✅ Connected")
 
-	// --- Ping ---
 	if err := db.Ping(ctx); err != nil {
 		log.Fatalf("ping: %v", err)
 	}
-	fmt.Println("✅ Ping OK")
 
-	// --- MySQL version ---
 	var version string
 	if err := db.QueryRow(ctx, "SELECT VERSION()").Scan(&version); err != nil {
 		log.Fatalf("version: %v", err)
 	}
-	fmt.Printf("✅ MySQL version: %s\n", version)
+	fmt.Printf("✅ Connected — MySQL %s\n", version)
 
-	// --- Introspect schema ---
-	fmt.Printf("\n📦 Introspecting database: %s\n", dbName)
+	// --- Introspect (one call does everything) ---
+	fmt.Printf("\n📦 Introspecting: %s\n", dbName)
 	introspector := mysql.NewIntrospector(db)
 
-	tables, err := introspector.ListTables(ctx, dbName)
+	schema, err := database.InspectSchema(ctx, introspector, dbName)
 	if err != nil {
-		log.Fatalf("list tables: %v", err)
+		log.Fatalf("inspect schema: %v", err)
 	}
 
-	fmt.Printf("📋 Tables found: %d\n", len(tables))
-	if len(tables) == 0 {
-		fmt.Println("  (no tables — create some in your DB first)")
+	fmt.Printf("📋 Tables found: %d\n", len(schema.Tables))
+	if len(schema.Tables) == 0 {
+		fmt.Println("  (no tables — create some first)")
 		fmt.Println("\n💡 Example:")
 		fmt.Println("  CREATE TABLE users (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100), email VARCHAR(100) UNIQUE);")
 		fmt.Println("  CREATE TABLE posts (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, title VARCHAR(255), FOREIGN KEY (user_id) REFERENCES users(id));")
 		return
 	}
 
-	// --- Inspect each table ---
+	// --- Table details ---
 	fmt.Println("\n🔍 Table Details:")
-	for _, t := range tables {
-		info, err := introspector.InspectTable(ctx, dbName, t)
-		if err != nil {
-			log.Printf("  inspect %s: %v", t, err)
-			continue
-		}
-
-		fmt.Printf("\n  ┌─ %s\n", info.Name)
-		for _, col := range info.Columns {
+	for _, t := range schema.Tables {
+		fmt.Printf("\n  ┌─ %s\n", t.Name)
+		for _, col := range t.Columns {
 			fmt.Printf("  │  %-20s %-15s %s\n", col.Name, col.DataType, buildFlags(col))
 		}
-		fmt.Printf("  └─ (%d columns)\n", len(info.Columns))
+		fmt.Printf("  └─ (%d columns)\n", len(t.Columns))
 	}
 
 	// --- Foreign keys ---
 	fmt.Println("\n🔗 Foreign Keys:")
-	schema, err := database.InspectSchema(ctx, introspector, dbName)
-	if err != nil {
-		log.Fatalf("inspect schema: %v", err)
-	}
 	if len(schema.ForeignKeys) == 0 {
 		fmt.Println("  (none)")
 	}
