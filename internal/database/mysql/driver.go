@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/koustreak/DatRi/internal/database"
+	"github.com/koustreak/DatRi/internal/errs"
 
 	_ "github.com/go-sql-driver/mysql" // register "mysql" driver
 )
@@ -23,14 +24,9 @@ type Driver struct {
 func New(ctx context.Context, cfg *database.Config) (*Driver, error) {
 	db, err := sql.Open("mysql", cfg.DSN)
 	if err != nil {
-		return nil, &database.DBError{
-			Kind:    database.ErrKindConnectionFailed,
-			Message: "invalid DSN",
-			Cause:   err,
-		}
+		return nil, errs.Wrap(errs.ErrKindConnectionFailed, "invalid DSN", err)
 	}
 
-	// Pool tuning — mirrors pgxpool settings as closely as sql.DB allows.
 	db.SetMaxOpenConns(int(cfg.MaxConns))
 	db.SetMaxIdleConns(int(cfg.MinConns))
 	db.SetConnMaxLifetime(cfg.MaxConnLifetime)
@@ -51,7 +47,6 @@ func New(ctx context.Context, cfg *database.Config) (*Driver, error) {
 
 // --- database.DB implementation ---
 
-// Ping verifies the database is reachable.
 func (d *Driver) Ping(ctx context.Context) error {
 	if err := d.db.PingContext(ctx); err != nil {
 		return mapError(err, "ping failed")
@@ -59,12 +54,10 @@ func (d *Driver) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Close releases all resources held by the connection pool.
 func (d *Driver) Close() {
 	_ = d.db.Close()
 }
 
-// Query executes a SQL statement that returns multiple rows.
 func (d *Driver) Query(ctx context.Context, sql string, args ...any) (database.Rows, error) {
 	rows, err := d.db.QueryContext(ctx, sql, args...)
 	if err != nil {
@@ -73,13 +66,11 @@ func (d *Driver) Query(ctx context.Context, sql string, args ...any) (database.R
 	return &mysqlRows{rows: rows}, nil
 }
 
-// QueryRow executes a SQL statement expected to return at most one row.
 func (d *Driver) QueryRow(ctx context.Context, query string, args ...any) (database.Row, error) {
 	row := d.db.QueryRowContext(ctx, query, args...)
 	return &mysqlRow{row: row}, nil
 }
 
-// ListTables returns all user-defined table names in the current schema.
 func (d *Driver) ListTables(ctx context.Context) ([]string, error) {
 	const q = `
 		SELECT table_name
@@ -108,7 +99,6 @@ func (d *Driver) ListTables(ctx context.Context) ([]string, error) {
 	return tables, nil
 }
 
-// TableExists reports whether a table with the given name exists in the current schema.
 func (d *Driver) TableExists(ctx context.Context, table string) (bool, error) {
 	const q = `
 		SELECT 1
@@ -128,8 +118,6 @@ func (d *Driver) TableExists(ctx context.Context, table string) (bool, error) {
 	return true, nil
 }
 
-// InspectSchema introspects the full schema and returns a *database.Schema.
-// This is intentionally expensive — callers must cache the result.
 func (d *Driver) InspectSchema(ctx context.Context) (*database.Schema, error) {
 	tables, err := d.ListTables(ctx)
 	if err != nil {
@@ -151,9 +139,6 @@ func (d *Driver) InspectSchema(ctx context.Context) (*database.Schema, error) {
 	return schema, nil
 }
 
-// inspectTable fetches column, primary key, unique, and foreign key info for one table.
-// MySQL conveniently encodes PK and unique info directly in information_schema.columns
-// via the column_key field ('PRI', 'UNI', 'MUL').
 func (d *Driver) inspectTable(ctx context.Context, table string) (*database.TableInfo, error) {
 	columns, pks, err := d.fetchColumns(ctx, table)
 	if err != nil {
@@ -173,9 +158,6 @@ func (d *Driver) inspectTable(ctx context.Context, table string) (*database.Tabl
 	}, nil
 }
 
-// fetchColumns retrieves column metadata for a table.
-// MySQL's information_schema.columns has a column_key field that encodes
-// 'PRI' (primary key) and 'UNI' (unique constraint) directly — no extra join needed.
 func (d *Driver) fetchColumns(ctx context.Context, table string) ([]*database.ColumnInfo, []string, error) {
 	const q = `
 		SELECT column_name,
@@ -214,9 +196,6 @@ func (d *Driver) fetchColumns(ctx context.Context, table string) ([]*database.Co
 	return cols, pks, rows.Err()
 }
 
-// fetchForeignKeys retrieves foreign key relationships for a table.
-// MySQL stores these in information_schema.key_column_usage with
-// non-null referenced_table_name for FK entries.
 func (d *Driver) fetchForeignKeys(ctx context.Context, table string) ([]*database.ForeignKey, error) {
 	const q = `
 		SELECT column_name,
@@ -246,9 +225,6 @@ func (d *Driver) fetchForeignKeys(ctx context.Context, table string) ([]*databas
 
 // --- sql.DB type wrappers ---
 
-// mysqlRows wraps *sql.Rows to satisfy database.Rows.
-// The only mismatch is Close() — sql.Rows.Close() returns error,
-// our interface discards it (errors are captured by Err() after iteration).
 type mysqlRows struct {
 	rows *sql.Rows
 }
@@ -259,7 +235,6 @@ func (r *mysqlRows) Columns() ([]string, error) { return r.rows.Columns() }
 func (r *mysqlRows) Close()                     { _ = r.rows.Close() }
 func (r *mysqlRows) Err() error                 { return r.rows.Err() }
 
-// mysqlRow wraps *sql.Row to satisfy database.Row.
 type mysqlRow struct {
 	row *sql.Row
 }
@@ -268,48 +243,42 @@ func (r *mysqlRow) Scan(dest ...any) error { return r.row.Scan(dest...) }
 
 // --- error mapping ---
 
-// mapError translates go-sql-driver/mysql errors into *database.DBError.
-func mapError(err error, msg string) *database.DBError {
+// mapError translates go-sql-driver/mysql errors into *errs.Error.
+func mapError(err error, msg string) *errs.Error {
 	if err == nil {
 		return nil
 	}
 
-	// Context deadline / cancellation
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return &database.DBError{Kind: database.ErrKindTimeout, Message: msg, Cause: err}
+		return errs.Wrap(errs.ErrKindTimeout, msg, err)
 	}
 
-	// No rows
 	if errors.Is(err, sql.ErrNoRows) {
-		return &database.DBError{Kind: database.ErrKindNotFound, Message: msg, Cause: err}
+		return errs.Wrap(errs.ErrKindNotFound, msg, err)
 	}
 
-	// MySQL server-side error
 	var mysqlErr *mysql.MySQLError
 	if errors.As(err, &mysqlErr) {
-		kind := classifyMySQLCode(mysqlErr.Number)
-		return &database.DBError{
-			Kind:    kind,
-			Message: fmt.Sprintf("%s: %s", msg, mysqlErr.Message),
-			Cause:   err,
-		}
+		return errs.Wrap(
+			classifyMySQLCode(mysqlErr.Number),
+			fmt.Sprintf("%s: %s", msg, mysqlErr.Message),
+			err,
+		)
 	}
 
-	// Fallthrough: assume connection-level failure
-	return &database.DBError{Kind: database.ErrKindConnectionFailed, Message: msg, Cause: err}
+	return errs.Wrap(errs.ErrKindConnectionFailed, msg, err)
 }
 
 // classifyMySQLCode maps MySQL error numbers to ErrKind.
-// Reference: https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html
-func classifyMySQLCode(code uint16) database.ErrKind {
+func classifyMySQLCode(code uint16) errs.ErrKind {
 	switch code {
-	case 1044, 1045, 1046, 1049: // access denied, unknown db
-		return database.ErrKindConnectionFailed
-	case 1040, 1203: // too many connections
-		return database.ErrKindConnectionFailed
-	case 1054, 1064, 1146: // unknown column, syntax error, table doesn't exist
-		return database.ErrKindQueryFailed
+	case 1044, 1045, 1046, 1049:
+		return errs.ErrKindConnectionFailed
+	case 1040, 1203:
+		return errs.ErrKindConnectionFailed
+	case 1054, 1064, 1146:
+		return errs.ErrKindQueryFailed
 	default:
-		return database.ErrKindQueryFailed
+		return errs.ErrKindQueryFailed
 	}
 }

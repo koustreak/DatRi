@@ -23,6 +23,7 @@ import (
 
 	"github.com/koustreak/DatRi/internal/database"
 	"github.com/koustreak/DatRi/internal/database/postgres"
+	"github.com/koustreak/DatRi/internal/errs"
 )
 
 func main() {
@@ -50,7 +51,7 @@ func main() {
 
 	db, err := postgres.New(ctx, cfg)
 	if err != nil {
-		if database.IsConnectionFailed(err) {
+		if errs.IsConnectionFailed(err) {
 			log.Fatalf("could not reach postgres: %v", err)
 		}
 		log.Fatalf("unexpected error: %v", err)
@@ -140,7 +141,7 @@ func main() {
 	// -----------------------------------------------------------------------
 	rows, err := db.Query(ctx, sql, args...)
 	if err != nil {
-		if database.IsTimeout(err) {
+		if errs.IsTimeout(err) {
 			log.Fatalf("query timed out: %v", err)
 		}
 		log.Fatalf("query failed: %v", err)
@@ -173,7 +174,7 @@ func main() {
 	// For QueryRow we need to know the columns in advance (from schema cache).
 	result, err := database.ScanRow(row, []string{"id", "name", "email"})
 	if err != nil {
-		if database.IsNotFound(err) {
+		if errs.IsNotFound(err) {
 			fmt.Println("⚠️  Row with id=1 not found")
 		} else {
 			log.Fatalf("scan row failed: %v", err)

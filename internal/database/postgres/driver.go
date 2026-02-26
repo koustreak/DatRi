@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/koustreak/DatRi/internal/database"
+	"github.com/koustreak/DatRi/internal/errs"
 )
 
 // Driver is a PostgreSQL implementation of database.DB backed by pgxpool.
@@ -22,11 +23,7 @@ type Driver struct {
 func New(ctx context.Context, cfg *database.Config) (*Driver, error) {
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {
-		return nil, &database.DBError{
-			Kind:    database.ErrKindConnectionFailed,
-			Message: "invalid DSN",
-			Cause:   err,
-		}
+		return nil, errs.Wrap(errs.ErrKindConnectionFailed, "invalid DSN", err)
 	}
 
 	poolCfg.MaxConns = cfg.MaxConns
@@ -37,11 +34,7 @@ func New(ctx context.Context, cfg *database.Config) (*Driver, error) {
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
-		return nil, &database.DBError{
-			Kind:    database.ErrKindConnectionFailed,
-			Message: "failed to create connection pool",
-			Cause:   err,
-		}
+		return nil, errs.Wrap(errs.ErrKindConnectionFailed, "failed to create connection pool", err)
 	}
 
 	d := &Driver{pool: pool}
@@ -56,7 +49,7 @@ func New(ctx context.Context, cfg *database.Config) (*Driver, error) {
 
 // --- database.DB implementation ---
 
-// Ping verifies the database is reachable by acquiring and releasing a connection.
+// Ping verifies the database is reachable.
 func (d *Driver) Ping(ctx context.Context) error {
 	if err := d.pool.Ping(ctx); err != nil {
 		return mapError(err, "ping failed")
@@ -156,7 +149,6 @@ func (d *Driver) InspectSchema(ctx context.Context) (*database.Schema, error) {
 	return schema, nil
 }
 
-// inspectTable fetches column, primary key, unique, and foreign key info for one table.
 func (d *Driver) inspectTable(ctx context.Context, table string) (*database.TableInfo, error) {
 	columns, err := d.fetchColumns(ctx, table)
 	if err != nil {
@@ -178,7 +170,6 @@ func (d *Driver) inspectTable(ctx context.Context, table string) (*database.Tabl
 		return nil, err
 	}
 
-	// Mark columns that are primary or unique
 	pkSet := toSet(pks)
 	uqSet := toSet(uniqueCols)
 	for _, col := range columns {
@@ -283,7 +274,6 @@ func (d *Driver) fetchForeignKeys(ctx context.Context, table string) ([]*databas
 	return fks, rows.Err()
 }
 
-// fetchStringList is a helper for queries that return a single text column.
 func (d *Driver) fetchStringList(ctx context.Context, q, table, errMsg string) ([]string, error) {
 	rows, err := d.pool.Query(ctx, q, table)
 	if err != nil {
@@ -304,7 +294,6 @@ func (d *Driver) fetchStringList(ctx context.Context, q, table, errMsg string) (
 
 // --- pgx type wrappers ---
 
-// pgxRows wraps pgx.Rows to satisfy database.Rows.
 type pgxRows struct {
 	rows pgx.Rows
 }
@@ -323,7 +312,6 @@ func (r *pgxRows) Columns() ([]string, error) {
 	return cols, nil
 }
 
-// pgxRow wraps pgx.Row to satisfy database.Row.
 type pgxRow struct {
 	row pgx.Row
 }
@@ -332,42 +320,31 @@ func (r *pgxRow) Scan(dest ...any) error { return r.row.Scan(dest...) }
 
 // --- error mapping ---
 
-// mapError translates pgx / pgconn native errors into *database.DBError.
-func mapError(err error, msg string) *database.DBError {
+// mapError translates pgx / pgconn native errors into *errs.Error.
+func mapError(err error, msg string) *errs.Error {
 	if err == nil {
 		return nil
 	}
 
-	// Context cancellation / deadline exceeded
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return &database.DBError{Kind: database.ErrKindTimeout, Message: msg, Cause: err}
+		return errs.Wrap(errs.ErrKindTimeout, msg, err)
 	}
 
-	// No rows
 	if errors.Is(err, pgx.ErrNoRows) {
-		return &database.DBError{Kind: database.ErrKindNotFound, Message: msg, Cause: err}
+		return errs.Wrap(errs.ErrKindNotFound, msg, err)
 	}
 
-	// Postgres server-side error (SQLSTATE codes)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		kind := database.ErrKindQueryFailed
-		// Class 08 — connection errors
+		kind := errs.ErrKindQueryFailed
 		if len(pgErr.Code) >= 2 && pgErr.Code[:2] == "08" {
-			kind = database.ErrKindConnectionFailed
+			kind = errs.ErrKindConnectionFailed
 		}
-		return &database.DBError{
-			Kind:    kind,
-			Message: fmt.Sprintf("%s: %s", msg, pgErr.Message),
-			Cause:   err,
-		}
+		return errs.Wrap(kind, fmt.Sprintf("%s: %s", msg, pgErr.Message), err)
 	}
 
-	// Fallthrough: connection-level errors (TLS, network, auth)
-	return &database.DBError{Kind: database.ErrKindConnectionFailed, Message: msg, Cause: err}
+	return errs.Wrap(errs.ErrKindConnectionFailed, msg, err)
 }
-
-// --- helpers ---
 
 func toSet(ss []string) map[string]bool {
 	m := make(map[string]bool, len(ss))

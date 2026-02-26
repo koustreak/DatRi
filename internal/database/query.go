@@ -3,6 +3,8 @@ package database
 import (
 	"fmt"
 	"strings"
+
+	"github.com/koustreak/DatRi/internal/errs"
 )
 
 // Dialect controls which SQL placeholder style the query builder emits.
@@ -138,7 +140,7 @@ func (b *SelectBuilder) Build() (string, []any, error) {
 		for _, w := range b.where {
 			op := strings.ToUpper(w.op)
 			if !validOps[op] {
-				return "", nil, errInvalidInput(
+				return "", nil, errs.New(errs.ErrKindInvalidInput,
 					fmt.Sprintf("unsupported WHERE operator: %q", w.op),
 				)
 			}
