@@ -1,0 +1,93 @@
+# datri.yaml — DatRi configuration reference
+# Declare multiple resources in one file. Each gets its own API server.
+
+# ─── Global ────────────────────────────────────────────────────────────────────
+# Defaults shared by ALL resources.
+# Resource-level auth/cors blocks completely override these for that resource.
+global:
+  log:
+    level: info # debug | info | warn | error
+    format: console # json | console
+
+  auth:
+    enabled: false
+    type: jwt # jwt | apikey
+    secret: "" # env: DATRI_AUTH_SECRET
+
+  cors:
+    enabled: true
+    origins: ["*"] # Use specific domains in production
+    methods: [GET, POST, PUT, DELETE, OPTIONS]
+    headers: [Content-Type, Authorization]
+
+# ─── Resources ─────────────────────────────────────────────────────────────────
+# Each resource runs on its own port with its own server goroutine.
+# All resource names must be unique. All ports must be unique.
+resources:
+  # ── Resource 1: Postgres DB → REST + GraphQL on :8080 ──────────────────────
+  - name: user-service # Unique name — used in logs and error messages
+    type: database # database | filestore
+
+    database:
+      driver: postgres # postgres | mysql
+      dsn: "" # env: DATRI_USER_SERVICE_DATABASE_DSN
+      pool:
+        max_conns: 25
+        min_conns: 5
+        max_conn_lifetime: 30m
+        max_conn_idle_time: 5m
+      timeouts:
+        connect: 10s
+        query: 30s
+
+    server:
+      host: "0.0.0.0"
+      port: 8080
+      protocols: [rest, graphql]
+
+    # This resource uses JWT auth — overrides global.auth
+    auth:
+      enabled: true
+      type: jwt
+      secret: "" # env: DATRI_USER_SERVICE_AUTH_SECRET
+
+    # This resource restricts CORS — overrides global.cors
+    cors:
+      enabled: true
+      origins: ["https://myapp.com"]
+      methods: [GET, POST, PUT, DELETE]
+      headers: [Content-Type, Authorization]
+
+  # ── Resource 2: MySQL DB → REST only on :8081 ───────────────────────────────
+  - name: analytics-service
+    type: database
+
+    database:
+      driver: mysql
+      dsn: "" # env: DATRI_ANALYTICS_SERVICE_DATABASE_DSN
+      # pool/timeouts omitted → built-in defaults apply
+
+    server:
+      port: 8081
+      protocols: [rest]
+
+    # auth/cors omitted → inherits from global
+
+  # ── Resource 3: MinIO file storage → REST on :8082 ─────────────────────────
+  - name: media-service
+    type: filestore
+
+    filestore:
+      provider: minio # minio | s3
+      endpoint: "localhost:9000"
+      access_key: "" # env: DATRI_MEDIA_SERVICE_ACCESS_KEY
+      secret_key: "" # env: DATRI_MEDIA_SERVICE_SECRET_KEY
+      use_ssl: false
+      region: ""
+      default_bucket: "uploads"
+
+    server:
+      port: 8082
+      protocols: [rest]
+
+    # No auth on media service — inherits global (disabled)
