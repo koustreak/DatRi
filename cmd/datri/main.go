@@ -14,6 +14,7 @@ import (
 
 	"github.com/koustreak/DatRi/internal/config"
 	"github.com/koustreak/DatRi/internal/database"
+	"github.com/koustreak/DatRi/internal/database/mysql"
 	"github.com/koustreak/DatRi/internal/database/postgres"
 	"github.com/koustreak/DatRi/internal/server/rest"
 	"github.com/rs/zerolog"
@@ -106,8 +107,10 @@ func connectAndInspect(ctx context.Context, res config.ResourceConfig, logger ze
 	switch dbCfg.Driver {
 	case database.DriverPostgres:
 		db, err = postgres.New(ctx, dbCfg)
+	case database.DriverMySQL:
+		db, err = mysql.New(ctx, dbCfg)
 	default:
-		return nil, nil, fmt.Errorf("unsupported driver: %q (mysql support coming soon)", dbCfg.Driver)
+		return nil, nil, fmt.Errorf("unsupported driver: %q", dbCfg.Driver)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("connecting to database: %w", err)
