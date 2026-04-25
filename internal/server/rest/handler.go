@@ -1,8 +1,10 @@
 package rest
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/koustreak/DatRi/internal/database"
@@ -12,9 +14,24 @@ import (
 // handlers holds the shared state needed by every HTTP handler in this package.
 // It is initialised once per Server and passed into the router.
 type handlers struct {
-	db      database.DB
-	schema  *database.Schema
-	dialect database.Dialect
+	db           database.DB
+	schema       *database.Schema
+	dialect      database.Dialect
+	queryTimeout time.Duration // applied to every DB call via dbCtx()
+}
+
+// defaultQueryTimeout is used when no timeout is configured.
+const defaultQueryTimeout = 30 * time.Second
+
+// dbCtx returns a child context with the configured query timeout applied
+// to the incoming HTTP request's context. The caller MUST call cancel().
+// This ensures no DB call can block a goroutine indefinitely.
+func (h *handlers) dbCtx(r *http.Request) (context.Context, context.CancelFunc) {
+	timeout := h.queryTimeout
+	if timeout <= 0 {
+		timeout = defaultQueryTimeout
+	}
+	return context.WithTimeout(r.Context(), timeout)
 }
 
 // ─── GET /tables ──────────────────────────────────────────────────────────────
@@ -24,7 +41,8 @@ type handlers struct {
 //	GET /tables
 //	→ 200 { "data": ["users", "orders", ...], "meta": { "count": 2 } }
 func (h *handlers) handleListTables(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, cancel := h.dbCtx(r)
+	defer cancel()
 
 	tables, err := h.db.ListTables(ctx)
 	if err != nil {
@@ -44,7 +62,8 @@ func (h *handlers) handleListTables(w http.ResponseWriter, r *http.Request) {
 //	GET /users?limit=20&offset=0&order_by=created_at&order_dir=desc&name=alice
 //	→ 200 { "data": [...], "meta": { "count": 20, "limit": 20, "offset": 0 } }
 func (h *handlers) handleListRows(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, cancel := h.dbCtx(r)
+	defer cancel()
 	tableName := chi.URLParam(r, "table")
 
 	// ── validate table exists in cached schema ────────────────────────────────
@@ -101,7 +120,8 @@ func (h *handlers) handleListRows(w http.ResponseWriter, r *http.Request) {
 //	GET /users/42
 //	→ 200 { "data": { "id": 42, "name": "Alice", ... } }
 func (h *handlers) handleGetRow(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, cancel := h.dbCtx(r)
+	defer cancel()
 	tableName := chi.URLParam(r, "table")
 	id := chi.URLParam(r, "id")
 

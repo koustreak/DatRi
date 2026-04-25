@@ -41,10 +41,16 @@ func New(cfg config.ResourceConfig, db database.DB, schema *database.Schema, log
 func (s *Server) Start(ctx context.Context) error {
 	dialect := dialectFromDriver(s.cfg.Database)
 
+	queryTimeout := defaultQueryTimeout
+	if s.cfg.Database != nil && s.cfg.Database.Timeouts.Query > 0 {
+		queryTimeout = s.cfg.Database.Timeouts.Query
+	}
+
 	h := &handlers{
-		db:      s.db,
-		schema:  s.schema,
-		dialect: dialect,
+		db:           s.db,
+		schema:       s.schema,
+		dialect:      dialect,
+		queryTimeout: queryTimeout,
 	}
 
 	router := buildRouter(h, s.cfg, s.log)
